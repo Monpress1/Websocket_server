@@ -1,6 +1,6 @@
 // server.js
 const WebSocket = require('ws');
-const server = new WebSocket.Server({ port: 8080 });
+const server = new WebSocket.Server({ port: 4000 });
 server.on('connection', (socket) => {
     console.log('A new client connected!');
     // Listen for messages from clients
@@ -19,4 +19,4 @@ server.on('connection', (socket) => {
         console.log('A client disconnected!');
     });
 });
-console.log('WebSocket server is running on ws://localhost:12345');
+console.log('WebSocket server is running on port:4000');
