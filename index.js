@@ -1,6 +1,6 @@
 // server.js
 const WebSocket = require('ws');
-const server = new WebSocket.Server({ port: 12345 });
+const server = new WebSocket.Server({ port: 'https://websocket-server-6jct.onrender.com' });
 server.on('connection', (socket) => {
     console.log('A new client connected!');
     // Listen for messages from clients
