@@ -5,7 +5,7 @@ const server = new WebSocket.Server({ port: 4000 });
 const rooms = {};
 
 server.on('connection', (socket) => {
-    console.log('A new client connected!');
+    // ... (connection and close handlers - same as before)
 
     socket.on('message', (message) => {
         try {
@@ -16,20 +16,20 @@ server.on('connection', (socket) => {
             } else if (parsedMessage.type === 'message') {
                 const roomId = parsedMessage.room;
                 const content = parsedMessage.content;
-                const sender = parsedMessage.sender; // Get the sender from the message
-                const messageId = parsedMessage.id;   // Get the ID from the message
+                const sender = parsedMessage.sender;
+                const messageId = parsedMessage.id;
 
-                if (!roomId || !content || !sender || !messageId) { // Check for all required fields
-                    console.error("Room ID, content, sender, and message ID are required");
+                if (!roomId || !content || !sender || !messageId) {
+                    console.error("Room ID, content, sender and message ID are required"); // More descriptive error
                     return;
                 }
 
                 if (rooms[roomId]) {
                     for (let client of rooms[roomId].values()) {
                         if (client.readyState === WebSocket.OPEN) {
-                            client.send(JSON.stringify({ 
-                                room: roomId, 
-                                content: content, 
+                            client.send(JSON.stringify({
+                                room: roomId,
+                                content: content,
                                 sender: sender, // Send back the sender
                                 id: messageId     // Send back the message ID
                             }));
@@ -48,11 +48,10 @@ server.on('connection', (socket) => {
         }
     });
 
-    socket.on('close', () => {
-        // ... (client disconnect logic - same as before)
-    });
+    // ... (close handler - same as before)
 });
 
 // ... (sendRoomPopulation function - same as before)
 
 console.log('WebSocket server is running on port 4000');
+
