@@ -1,4 +1,3 @@
-// server.js
 const WebSocket = require('ws');
 
 const server = new WebSocket.Server({ port: 4000 });
@@ -27,7 +26,7 @@ server.on('connection', (socket) => {
             } else if (parsedMessage.type === 'message') {
                 const roomId = parsedMessage.room;
                 const content = parsedMessage.content;
-                const sender = parsedMessage.sender; // Get the sender
+                const sender = parsedMessage.sender;
 
                 if (!roomId || !content || !sender) {
                     console.error("Room ID, content, and sender are required");
@@ -37,8 +36,9 @@ server.on('connection', (socket) => {
                 if (rooms[roomId]) {
                     for (let client of rooms[roomId].values()) {
                         if (client.readyState === WebSocket.OPEN) {
-                            // Include sender information in the message
-                            client.send(JSON.stringify({ room: roomId, content: content, sender: sender }));
+                            if (client !== socket) { // Prevent echoing to sender
+                                client.send(JSON.stringify({ room: roomId, content: content, sender: sender }));
+                            }
                         }
                     }
                 } else {
@@ -87,5 +87,3 @@ function sendRoomPopulation(roomId) {
 
 console.log('WebSocket server is running on port 4000');
 
-
-            
