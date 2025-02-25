@@ -13,18 +13,27 @@ server.on('connection', (socket) => {
 
             if (parsedMessage.type === 'join') {
                 const roomId = parsedMessage.room;
-                if (!roomId) {
-                    console.error("Room ID is required");
+                const user = parsedMessage.user; // Get the username
+
+                if (!roomId || !user) {  // Check for both room and user
+                    console.error("Room ID and Username are required");
                     return;
                 }
+
                 if (!rooms[roomId]) {
-                    rooms[roomId] = { users: new Set(), count: 1 }; // Initialize count to 1
-                } else {
-                    rooms[roomId].users.add(socket);
-                    rooms[roomId].count++; // Increment count
+                    rooms[roomId] = { users: new Set(), count: 0 }; // Initialize count to 0!
                 }
-                console.log(`Client joined room: ${roomId}`);
-                sendRoomPopulation(roomId);
+
+                if (!rooms[roomId].users.has(user)) { // Check if user already in room
+                    rooms[roomId].users.add(user); // Store user by name
+                    rooms[roomId].count++; // Increment count ONLY if user is new to the room
+                    console.log(`${user} joined room: ${roomId}`);
+                    sendRoomPopulation(roomId);
+                } else {
+                    console.log(`${user} is already in room: ${roomId}`); // Handle duplicate join
+                    sendRoomPopulation(roomId); // Still send population update even if already joined
+                }
+
             } else if (parsedMessage.type === 'message') {
                 const roomId = parsedMessage.room;
                 const content = parsedMessage.content;
@@ -35,26 +44,29 @@ server.on('connection', (socket) => {
                     return;
                 }
 
-                if (rooms[roomId]) {
-                    for (let client of rooms[roomId].users.values()) {
+                if (rooms[roomId] && rooms[roomId].users.has(sender)) { //Check if the sender is in the room
+                    for (let client of server.clients) { // Iterate over all connected clients
                         if (client.readyState === WebSocket.OPEN) {
-                            if (client !== socket) { // Prevent echoing to sender
-                                client.send(JSON.stringify({ room: roomId, content: content, sender: sender }));
-                            }
+                            client.send(JSON.stringify({ room: roomId, content: content, sender: sender }));
                         }
                     }
                 } else {
-                    console.log(`Room ${roomId} does not exist.`);
+                    console.log(`Room ${roomId} does not exist or user ${sender} is not in room.`);
                 }
             } else if (parsedMessage.type === 'leave') {
                 const roomId = parsedMessage.room;
+                const user = parsedMessage.user;
+
                 if (rooms[roomId]) {
-                    rooms[roomId].users.delete(socket);
-                    rooms[roomId].count--; // Decrement count
-                    console.log(`Client left room: ${roomId}`);
-                    sendRoomPopulation(roomId);
-                    if (rooms[roomId].users.size === 0) {
-                        delete rooms[roomId];
+                    if (rooms[roomId].users.delete(user)) { // Delete by username
+                        rooms[roomId].count--;
+                        console.log(`${user} left room: ${roomId}`);
+                        sendRoomPopulation(roomId);
+                        if (rooms[roomId].users.size === 0) {
+                            delete rooms[roomId];
+                        }
+                    } else {
+                        console.log(`${user} was not in room ${roomId}`);
                     }
                 }
             } else {
@@ -66,13 +78,21 @@ server.on('connection', (socket) => {
     });
 
     socket.on('close', () => {
+        let userToRemove;
         for (const roomId in rooms) {
-            rooms[roomId].users.delete(socket);
-            rooms[roomId].count--; // Decrement count
-            if (rooms[roomId].users.size === 0) {
-                delete rooms[roomId];
+            for (const user of rooms[roomId].users) {
+                if (rooms[roomId].users.has(user)) {
+                    rooms[roomId].users.delete(user);
+                    rooms[roomId].count--;
+                    userToRemove = user;
+                    console.log(`${user} disconnected`);
+                    sendRoomPopulation(roomId);
+                    if (rooms[roomId].users.size === 0) {
+                        delete rooms[roomId];
+                    }
+                    break;
+                }
             }
-            sendRoomPopulation(roomId);
         }
         console.log('A client disconnected!');
     });
@@ -81,9 +101,11 @@ server.on('connection', (socket) => {
 function sendRoomPopulation(roomId) {
     if (rooms[roomId]) {
         const population = rooms[roomId].count;
-        for (let client of rooms[roomId].users.values()) {
-            if (client.readyState === WebSocket.OPEN) {
-                client.send(JSON.stringify({ type: 'population', room: roomId, count: population }));
+        for (let user of rooms[roomId].users) { // Iterate through the users Set
+            for (let client of server.clients) {
+                if (client.readyState === WebSocket.OPEN) {
+                    client.send(JSON.stringify({ type: 'population', room: roomId, count: population }));
+                }
             }
         }
     }
