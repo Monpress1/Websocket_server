@@ -24,23 +24,22 @@ server.on('connection', (socket) => {
                     rooms[roomId] = { users: new Set(), count: 0 };
                 }
 
-                // ***THE KEY FIX IS HERE***
-                let userJoined = false; // Flag to track if the user actually joined
+                let userJoined = false;
 
                 if (!rooms[roomId].users.has(user)) {
                     rooms[roomId].users.add(user);
-                    userJoined = true; // Set the flag to true if the user joined
+                    userJoined = true;
                     console.log(`${user} joined room: ${roomId}`);
                 } else {
                     console.log(`${user} is already in room: ${roomId}`);
                 }
 
-                if (userJoined) { // Increment only if user *actually* joined
+                if (userJoined) {
                     rooms[roomId].count++;
-                    sendRoomPopulation(roomId);
-                } else {
-                    sendRoomPopulation(roomId); // Send population even if user already in room
                 }
+
+                // ***Call sendRoomPopulation ONLY ONCE, AFTER all logic***
+                sendRoomPopulation(roomId); // Correct placement
 
             } else if (parsedMessage.type === 'message') {
                 // ... (message handling code - no changes needed)
@@ -89,3 +88,4 @@ function sendRoomPopulation(roomId) {
 }
 
 console.log('WebSocket server is running on port 4000');
+
