@@ -13,7 +13,7 @@ server.on('connection', (socket) => {
 
             if (parsedMessage.type === 'join') {
                 const roomId = parsedMessage.room;
-                const user = parsedMessage.user; // Get the username
+                const user = parsedMessage.user;
 
                 if (!roomId) {
                     console.error("Room ID is required");
@@ -21,22 +21,22 @@ server.on('connection', (socket) => {
                 }
 
                 if (!rooms[roomId]) {
-                    rooms[roomId] = { users: new Set(), messages: [] }; // Initialize messages array
+                    rooms[roomId] = { users: new Set(), messages: [] };
                 }
 
-                rooms[roomId].users.add(socket); // Use the users set
+                rooms[roomId].users.add(socket);
                 console.log(`Client ${user} joined room: ${roomId}`);
 
-                // Send message history to the newly joined client
+                // Send message history to the newly joined client *after* joining the room
                 const history = rooms[roomId].messages;
                 socket.send(JSON.stringify({ type: 'history', room: roomId, messages: history }));
 
-                sendRoomPopulation(roomId); // Send updated population
+                sendRoomPopulation(roomId);
             } else if (parsedMessage.type === 'message') {
                 const roomId = parsedMessage.room;
                 const content = parsedMessage.content;
                 const sender = parsedMessage.sender;
-                const id = parsedMessage.id; // Get the message ID
+                const id = parsedMessage.id;
 
                 if (!roomId || !content || !sender || !id) {
                     console.error("Room ID, content, sender, and ID are required");
@@ -45,10 +45,11 @@ server.on('connection', (socket) => {
 
                 if (rooms[roomId]) {
                     const messageToStore = { content, sender, id };
-                    rooms[roomId].messages.push(messageToStore); // Store message with ID
+                    rooms[roomId].messages.push(messageToStore);
 
-                    for (let client of rooms[roomId].users.values()) {
-                        if (client.readyState === WebSocket.OPEN) {
+                    // Send the message to *other* clients in the room *only*
+                    for (let client of rooms[roomId].users) { // Iterate directly over the set
+                        if (client !== socket && client.readyState === WebSocket.OPEN) { // Exclude sender
                             client.send(JSON.stringify({ type: 'message', room: roomId, content: content, sender: sender, id: id }));
                         }
                     }
@@ -58,7 +59,7 @@ server.on('connection', (socket) => {
             } else if (parsedMessage.type === 'leave') {
                 const roomId = parsedMessage.room;
                 if (rooms[roomId]) {
-                    rooms[roomId].users.delete(socket); // Remove from users set
+                    rooms[roomId].users.delete(socket);
                     console.log(`Client left room: ${roomId}`);
                     sendRoomPopulation(roomId);
                     if (rooms[roomId].users.size === 0) {
@@ -75,8 +76,8 @@ server.on('connection', (socket) => {
 
     socket.on('close', () => {
         for (const roomId in rooms) {
-            if (rooms[roomId] && rooms[roomId].users) { // Check if the room and users exist
-                rooms[roomId].users.delete(socket); // Remove from users set
+            if (rooms[roomId] && rooms[roomId].users) {
+                rooms[roomId].users.delete(socket);
                 sendRoomPopulation(roomId);
                 if (rooms[roomId].users.size === 0) {
                     delete rooms[roomId];
@@ -88,9 +89,9 @@ server.on('connection', (socket) => {
 });
 
 function sendRoomPopulation(roomId) {
-    if (rooms[roomId] && rooms[roomId].users) { // Check if the room and users exist
+    if (rooms[roomId] && rooms[roomId].users) {
         const population = rooms[roomId].users.size;
-        for (let client of rooms[roomId].users.values()) {
+        for (let client of rooms[roomId].users) {
             if (client.readyState === WebSocket.OPEN) {
                 client.send(JSON.stringify({ type: 'population', room: roomId, count: population }));
             }
@@ -100,4 +101,4 @@ function sendRoomPopulation(roomId) {
 
 console.log('WebSocket server is running on port 4000');
 
-            
+                
