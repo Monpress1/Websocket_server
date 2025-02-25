@@ -18,9 +18,11 @@ server.on('connection', (socket) => {
                     return;
                 }
                 if (!rooms[roomId]) {
-                    rooms[roomId] = new Set();
+                    rooms[roomId] = { users: new Set(), count: 1 }; // Initialize count to 1
+                } else {
+                    rooms[roomId].users.add(socket);
+                    rooms[roomId].count++; // Increment count
                 }
-                rooms[roomId].add(socket);
                 console.log(`Client joined room: ${roomId}`);
                 sendRoomPopulation(roomId);
             } else if (parsedMessage.type === 'message') {
@@ -34,7 +36,7 @@ server.on('connection', (socket) => {
                 }
 
                 if (rooms[roomId]) {
-                    for (let client of rooms[roomId].values()) {
+                    for (let client of rooms[roomId].users.values()) {
                         if (client.readyState === WebSocket.OPEN) {
                             if (client !== socket) { // Prevent echoing to sender
                                 client.send(JSON.stringify({ room: roomId, content: content, sender: sender }));
@@ -47,10 +49,11 @@ server.on('connection', (socket) => {
             } else if (parsedMessage.type === 'leave') {
                 const roomId = parsedMessage.room;
                 if (rooms[roomId]) {
-                    rooms[roomId].delete(socket);
+                    rooms[roomId].users.delete(socket);
+                    rooms[roomId].count--; // Decrement count
                     console.log(`Client left room: ${roomId}`);
                     sendRoomPopulation(roomId);
-                    if (rooms[roomId].size === 0) {
+                    if (rooms[roomId].users.size === 0) {
                         delete rooms[roomId];
                     }
                 }
@@ -64,8 +67,9 @@ server.on('connection', (socket) => {
 
     socket.on('close', () => {
         for (const roomId in rooms) {
-            rooms[roomId].delete(socket);
-            if (rooms[roomId].size === 0) {
+            rooms[roomId].users.delete(socket);
+            rooms[roomId].count--; // Decrement count
+            if (rooms[roomId].users.size === 0) {
                 delete rooms[roomId];
             }
             sendRoomPopulation(roomId);
@@ -76,8 +80,8 @@ server.on('connection', (socket) => {
 
 function sendRoomPopulation(roomId) {
     if (rooms[roomId]) {
-        const population = rooms[roomId].size;
-        for (let client of rooms[roomId].values()) {
+        const population = rooms[roomId].count;
+        for (let client of rooms[roomId].users.values()) {
             if (client.readyState === WebSocket.OPEN) {
                 client.send(JSON.stringify({ type: 'population', room: roomId, count: population }));
             }
@@ -86,4 +90,3 @@ function sendRoomPopulation(roomId) {
 }
 
 console.log('WebSocket server is running on port 4000');
-                
