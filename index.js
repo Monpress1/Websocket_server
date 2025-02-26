@@ -1,66 +1,88 @@
 const WebSocket = require('ws');
 
-const wss = new WebSocket.Server({ port: 8080 });
+const server = new WebSocket.Server({ port: 4000 });
 
-let messages = [];
-const connectedClients = new Set();
+const rooms = {};
 
-wss.on('connection', ws => {
-    console.log('Client connected');
-    connectedClients.add(ws);
+server.on('connection', (socket) => {
+    console.log('A new client connected!');
 
-    ws.send(JSON.stringify({ type: 'history', messages }));
-    sendOnlineUserCount();
+    socket.on('message', (message) => {
+        try {
+            const parsedMessage = JSON.parse(message);
 
-    ws.on('message', message => {
-        const parsedMessage = JSON.parse(message);
-
-        if (parsedMessage.type === 'chat') {
-            const newMessage = {
-                user: parsedMessage.user,
-                message: parsedMessage.content, // <--- Corrected: Send only the content
-                timestamp: new Date().toISOString(),
-                room: parsedMessage.room // Ensure the room is also saved
-            };
-
-            messages.push(newMessage);
-
-            wss.clients.forEach(client => {
-                if (client.readyState === WebSocket.OPEN) {
-                    // Send only the message content and other necessary data
-                    client.send(JSON.stringify({ 
-                        type: 'chat', 
-                        message: newMessage.message, // <--- Corrected: Send only the content
-                        user: newMessage.user,
-                        timestamp: newMessage.timestamp,
-                        room: newMessage.room // Send the room so client knows where message belongs
-                     }));
+            if (parsedMessage.type === 'join') {
+                const roomId = parsedMessage.room;
+                if (!roomId) {
+                    console.error("Room ID is required");
+                    return;
                 }
-            });
+                if (!rooms[roomId]) {
+                    rooms[roomId] = new Set();
+                }
+                rooms[roomId].add(socket);
+                console.log(`Client joined room: ${roomId}`);
+                sendRoomPopulation(roomId);
+            } else if (parsedMessage.type === 'message') {
+                const roomId = parsedMessage.room;
+                const content = parsedMessage.content;
+                const sender = parsedMessage.sender;
+
+                if (!roomId || !content || !sender) {
+                    console.error("Room ID, content, and sender are required");
+                    return;
+                }
+
+                if (rooms[roomId]) {
+                    for (let client of rooms[roomId].values()) {
+                        if (client.readyState === WebSocket.OPEN) {
+                            if (client !== socket) { // Prevent echoing to sender
+                                client.send(JSON.stringify({ room: roomId, content: content, sender: sender }));
+                            }
+                        }
+                    }
+                } else {
+                    console.log(`Room ${roomId} does not exist.`);
+                }
+            } else if (parsedMessage.type === 'leave') {
+                const roomId = parsedMessage.room;
+                if (rooms[roomId]) {
+                    rooms[roomId].delete(socket);
+                    console.log(`Client left room: ${roomId}`);
+                    sendRoomPopulation(roomId);
+                    if (rooms[roomId].size === 0) {
+                        delete rooms[roomId];
+                    }
+                }
+            } else {
+                console.log("Unknown message type:", parsedMessage.type);
+            }
+        } catch (error) {
+            console.error('Error parsing message:', error);
         }
     });
 
-    ws.on('close', () => {
-        console.log('Client disconnected');
-        connectedClients.delete(ws);
-        sendOnlineUserCount();
-    });
-
-    ws.on('error', error => {
-        console.error('WebSocket error:', error);
-        connectedClients.delete(ws);
-        sendOnlineUserCount();
+    socket.on('close', () => {
+        for (const roomId in rooms) {
+            rooms[roomId].delete(socket);
+            if (rooms[roomId].size === 0) {
+                delete rooms[roomId];
+            }
+            sendRoomPopulation(roomId);
+        }
+        console.log('A client disconnected!');
     });
 });
 
-function sendOnlineUserCount() {
-    const onlineUserCount = connectedClients.size;
-    console.log(`Online Users: ${onlineUserCount}`);
-
-    wss.clients.forEach(client => {
-        if (client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify({ type: 'userCount', count: onlineUserCount }));
+function sendRoomPopulation(roomId) {
+    if (rooms[roomId]) {
+        const population = rooms[roomId].size;
+        for (let client of rooms[roomId].values()) {
+            if (client.readyState === WebSocket.OPEN) {
+                client.send(JSON.stringify({ type: 'population', room: roomId, count: population }));
+            }
         }
-    });
+    }
 }
 
+console.log('WebSocket server is running on port 4000');
