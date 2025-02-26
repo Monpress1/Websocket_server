@@ -2,64 +2,65 @@ const WebSocket = require('ws');
 
 const wss = new WebSocket.Server({ port: 8080 });
 
-// In-memory message store (this will be lost on server restart!)
 let messages = [];
-
-// Keep track of connected clients (users)
 const connectedClients = new Set();
 
 wss.on('connection', ws => {
-  console.log('Client connected');
-  connectedClients.add(ws);
+    console.log('Client connected');
+    connectedClients.add(ws);
 
-  // Send existing messages to the newly connected client
-  ws.send(JSON.stringify({ type: 'history', messages }));
+    ws.send(JSON.stringify({ type: 'history', messages }));
+    sendOnlineUserCount();
 
-  // Send the current online user count to the newly connected client
-  sendOnlineUserCount();
+    ws.on('message', message => {
+        const parsedMessage = JSON.parse(message);
 
+        if (parsedMessage.type === 'chat') {
+            const newMessage = {
+                user: parsedMessage.user,
+                message: parsedMessage.content, // <--- Corrected: Send only the content
+                timestamp: new Date().toISOString(),
+                room: parsedMessage.room // Ensure the room is also saved
+            };
 
-  ws.on('message', message => {
-    const parsedMessage = JSON.parse(message);
+            messages.push(newMessage);
 
-    if (parsedMessage.type === 'chat') {
-      const newMessage = {
-        user: parsedMessage.user,
-        message: parsedMessage.message,
-        timestamp: new Date().toISOString()
-      };
-
-      messages.push(newMessage);
-
-      wss.clients.forEach(client => {
-        if (client.readyState === WebSocket.OPEN) {
-          client.send(JSON.stringify({ type: 'chat', message: newMessage }));
+            wss.clients.forEach(client => {
+                if (client.readyState === WebSocket.OPEN) {
+                    // Send only the message content and other necessary data
+                    client.send(JSON.stringify({ 
+                        type: 'chat', 
+                        message: newMessage.message, // <--- Corrected: Send only the content
+                        user: newMessage.user,
+                        timestamp: newMessage.timestamp,
+                        room: newMessage.room // Send the room so client knows where message belongs
+                     }));
+                }
+            });
         }
-      });
-    }
-  });
+    });
 
-  ws.on('close', () => {
-    console.log('Client disconnected');
-    connectedClients.delete(ws);
-    sendOnlineUserCount();
-  });
+    ws.on('close', () => {
+        console.log('Client disconnected');
+        connectedClients.delete(ws);
+        sendOnlineUserCount();
+    });
 
-  ws.on('error', error => {
-    console.error('WebSocket error:', error);
-    connectedClients.delete(ws);
-    sendOnlineUserCount();
-  });
+    ws.on('error', error => {
+        console.error('WebSocket error:', error);
+        connectedClients.delete(ws);
+        sendOnlineUserCount();
+    });
 });
 
 function sendOnlineUserCount() {
-  const onlineUserCount = connectedClients.size;
-  console.log(`Online Users: ${onlineUserCount}`);
+    const onlineUserCount = connectedClients.size;
+    console.log(`Online Users: ${onlineUserCount}`);
 
-  wss.clients.forEach(client => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(JSON.stringify({ type: 'userCount', count: onlineUserCount }));
-    }
-  });
+    wss.clients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify({ type: 'userCount', count: onlineUserCount }));
+        }
+    });
 }
 
