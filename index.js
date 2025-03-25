@@ -2,58 +2,72 @@ const WebSocket = require('ws');
 
 const server = new WebSocket.Server({ port: 4000 });
 
-const rooms = {};
+const clients = new Map(); // Store client connections and their story IDs
+const stories = new Map(); // Store stories by ID
 
 server.on('connection', (socket) => {
     console.log('A new client connected!');
+    const clientId = generateClientId(); // Generate unique client ID
+    clients.set(socket, { id: clientId, storyIds: new Set() });
 
     socket.on('message', (message) => {
         try {
             const parsedMessage = JSON.parse(message);
 
-            if (parsedMessage.type === 'join') {
-                const roomId = parsedMessage.room;
-                if (!roomId) {
-                    console.error("Room ID is required");
+            if (parsedMessage.type === 'registerStories') {
+                const storyIds = parsedMessage.storyIds;
+                if (!Array.isArray(storyIds)) {
+                    console.error("Invalid storyIds format");
                     return;
                 }
-                if (!rooms[roomId]) {
-                    rooms[roomId] = new Set();
+                clients.get(socket).storyIds = new Set(storyIds);
+                console.log(`Client ${clientId} registered stories: ${storyIds}`);
+            } else if (parsedMessage.type === 'requestStories') {
+                const requestedStoryIds = parsedMessage.storyIds;
+                if (!Array.isArray(requestedStoryIds)) {
+                    console.error("Invalid requestedStoryIds format");
+                    return;
                 }
-                rooms[roomId].add(socket);
-                console.log(`Client joined room: ${roomId}`);
-                sendRoomPopulation(roomId);
-            } else if (parsedMessage.type === 'message') {
-                const roomId = parsedMessage.room;
-                const content = parsedMessage.content;
-                const sender = parsedMessage.sender;
+                const requestingClient = clients.get(socket);
 
-                if (!roomId || !content || !sender) {
-                    console.error("Room ID, content, and sender are required");
+                if (!requestingClient) {
+                    console.error("Requesting client not found");
                     return;
                 }
 
-                if (rooms[roomId]) {
-                    for (let client of rooms[roomId].values()) {
-                        if (client.readyState === WebSocket.OPEN) {
-                            if (client !== socket) { // Prevent echoing to sender
-                                client.send(JSON.stringify({ room: roomId, content: content, sender: sender }));
+                requestedStoryIds.forEach(storyId => {
+                    if (stories.has(storyId)) {
+                        socket.send(JSON.stringify({ type: 'storyData', storyId: storyId, story: stories.get(storyId) }));
+                    } else {
+                        // Find other clients that have this story
+                        server.clients.forEach(otherClient => {
+                            if (otherClient !== socket && clients.get(otherClient).storyIds.has(storyId) && otherClient.readyState === WebSocket.OPEN) {
+                                otherClient.send(JSON.stringify({ type: 'requestStoryData', storyId: storyId, targetClientId: requestingClient.id }));
                             }
-                        }
+                        });
                     }
-                } else {
-                    console.log(`Room ${roomId} does not exist.`);
-                }
-            } else if (parsedMessage.type === 'leave') {
-                const roomId = parsedMessage.room;
-                if (rooms[roomId]) {
-                    rooms[roomId].delete(socket);
-                    console.log(`Client left room: ${roomId}`);
-                    sendRoomPopulation(roomId);
-                    if (rooms[roomId].size === 0) {
-                        delete rooms[roomId];
+                });
+            } else if (parsedMessage.type === 'storyDataRequestResponse') {
+                const storyId = parsedMessage.storyId;
+                const storyData = parsedMessage.story;
+                const targetClientId = parsedMessage.targetClientId;
+
+                server.clients.forEach(otherClient => {
+                    if (clients.get(otherClient).id === targetClientId && otherClient.readyState === WebSocket.OPEN) {
+                        otherClient.send(JSON.stringify({ type: 'storyData', storyId: storyId, story: storyData }));
                     }
-                }
+                });
+            } else if (parsedMessage.type === 'storeStory') {
+                const storyId = parsedMessage.storyId;
+                const story = parsedMessage.story;
+                stories.set(storyId, story);
+                clients.get(socket).storyIds.add(storyId);
+
+                server.clients.forEach(client => {
+                    if (client.readyState === WebSocket.OPEN && client !== socket) {
+                        client.send(JSON.stringify({ type: 'newStory', storyId: storyId, story: story }));
+                    }
+                });
             } else {
                 console.log("Unknown message type:", parsedMessage.type);
             }
@@ -63,26 +77,13 @@ server.on('connection', (socket) => {
     });
 
     socket.on('close', () => {
-        for (const roomId in rooms) {
-            rooms[roomId].delete(socket);
-            if (rooms[roomId].size === 0) {
-                delete rooms[roomId];
-            }
-            sendRoomPopulation(roomId);
-        }
-        console.log('A client disconnected!');
+        clients.delete(socket);
+        console.log(`Client ${clientId} disconnected!`);
     });
 });
 
-function sendRoomPopulation(roomId) {
-    if (rooms[roomId]) {
-        const population = rooms[roomId].size;
-        for (let client of rooms[roomId].values()) {
-            if (client.readyState === WebSocket.OPEN) {
-                client.send(JSON.stringify({ type: 'population', room: roomId, count: population }));
-            }
-        }
-    }
+function generateClientId() {
+    return Math.random().toString(36).substr(2, 9);
 }
 
 console.log('WebSocket server is running on port 4000');
