@@ -1,5 +1,4 @@
 const WebSocket = require('ws');
-const fs = require('fs').promises; // For reading files (if needed on the server-side)
 
 const server = new WebSocket.Server({ port: 4000 });
 const rooms = {};
@@ -7,7 +6,7 @@ const rooms = {};
 server.on('connection', (socket) => {
     console.log('A new client connected!');
 
-    socket.on('message', async (message) => {
+    socket.on('message', (message) => {
         try {
             const parsedMessage = JSON.parse(message);
 
