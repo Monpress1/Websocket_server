@@ -12,12 +12,13 @@ server.on('connection', (socket) => {
             const parsedMessage = JSON.parse(message);
 
             if (parsedMessage.type === 'join') {
-                const roomId = parsedMessage.room;
-                const username = parsedMessage.user; // Assuming client sends 'user' on join
-                const profile = parsedMessage.profile; // Assuming client sends 'profile' on join
+                const roomId = parsedMessage.room || 'anonymous'; // Default to 'anonymous' if no room provided
+                const username = parsedMessage.user;
+                const profile = parsedMessage.profile;
 
-                if (!roomId || !username) {
-                    console.error("Room ID and username are required for join");
+                if (!username) {
+                    console.error("Username is required for join");
+                    socket.close();
                     return;
                 }
                 userConnections.set(socket, { username, profile }); // Associate socket with user info
@@ -49,7 +50,7 @@ server.on('connection', (socket) => {
                                 room: roomId,
                                 content: content,
                                 sender: sender,
-                                senderProfile: senderProfile // Include the profile
+                                senderProfile: senderProfile
                             }));
                         }
                     }
@@ -76,7 +77,7 @@ server.on('connection', (socket) => {
                                 room: roomId,
                                 data: base64Image,
                                 sender: sender,
-                                senderProfile: senderProfile // Include the profile
+                                senderProfile: senderProfile
                             }));
                         }
                     }
