@@ -1,4 +1,4 @@
- const WebSocket = require('ws');
+  const WebSocket = require('ws');
 
 const server = new WebSocket.Server({ port: 4000 });
 const rooms = {};
@@ -36,9 +36,11 @@ server.on('connection', (socket) => {
                 const senderInfo = userConnections.get(socket);
                 const sender = senderInfo ? senderInfo.username : 'Anonymous';
                 const senderProfile = senderInfo ? senderInfo.profile : null;
+                const id = parsedMessage.id; // Get the id from the client
+                const timestamp = parsedMessage.timestamp; // Get the timestamp from the client
 
-                if (!roomId || !content) {
-                    console.error("Room ID and content are required for message");
+                if (!roomId || !content || !id || !timestamp) {
+                    console.error("Room ID, content, ID, and timestamp are required for message");
                     return;
                 }
 
@@ -50,7 +52,9 @@ server.on('connection', (socket) => {
                                 room: roomId,
                                 content: content,
                                 sender: sender,
-                                senderProfile: senderProfile
+                                senderProfile: senderProfile,
+                                id: id, // Send the id back to the client
+                                timestamp: timestamp // Send the timestamp back to the client
                             }));
                         }
                     }
@@ -63,9 +67,11 @@ server.on('connection', (socket) => {
                 const senderInfo = userConnections.get(socket);
                 const sender = senderInfo ? senderInfo.username : 'Anonymous';
                 const senderProfile = senderInfo ? senderInfo.profile : null;
+                const id = parsedMessage.id; // Get the id from the client
+                const timestamp = parsedMessage.timestamp; // Get the timestamp from the client
 
-                if (!roomId || !base64Image) {
-                    console.error("Room ID and image data are required for images");
+                if (!roomId || !base64Image || !id || !timestamp) {
+                    console.error("Room ID, image data, ID, and timestamp are required for images");
                     return;
                 }
 
@@ -77,7 +83,9 @@ server.on('connection', (socket) => {
                                 room: roomId,
                                 data: base64Image,
                                 sender: sender,
-                                senderProfile: senderProfile
+                                senderProfile: senderProfile,
+                                id: id, // Send the id back to the client
+                                timestamp: timestamp // Send the timestamp back to the client
                             }));
                         }
                     }
