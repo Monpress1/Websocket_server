@@ -1,263 +1,181 @@
-const fs = require('fs/promises');
-const path = require('path');
-const { v4: uuidv4 } = require('uuid');
-const http = require('http'); // Required for creating an HTTP server
-const express = require('express'); // Required for serving static files (images)
 const WebSocket = require('ws');
 
-// --- Configuration ---
-const CHAT_DATA_DIR = path.join(__dirname, 'chat_data');
-const MESSAGES_FILE = path.join(CHAT_DATA_DIR, 'messages.json');
-const IMAGES_DIR = path.join(CHAT_DATA_DIR, 'images');
+const server = new WebSocket.Server({ port: 4000 });
+const rooms = {};
+const userConnections = new Map();
 
-// --- In-memory storage (will be loaded from file) ---
-let chatMessages = []; // This will now hold all messages loaded from MESSAGES_FILE
-const rooms = {}; // Tracks active WebSocket connections per room
-const userConnections = new Map(); // Associates each socket with its user profile
+server.on('connection', (socket) => {
+    console.log('A new client connected!');
 
-// --- Ensure directories and load messages on startup ---
-async function ensureDataDirectories() {
-    await fs.mkdir(IMAGES_DIR, { recursive: true });
-    await fs.mkdir(CHAT_DATA_DIR, { recursive: true });
-    console.log('Chat data directories ensured.');
-}
-
-async function loadMessagesFromFile() {
-    try {
-        const data = await fs.readFile(MESSAGES_FILE, 'utf8');
-        chatMessages = JSON.parse(data);
-        console.log(`Loaded ${chatMessages.length} messages from ${MESSAGES_FILE}`);
-    } catch (error) {
-        if (error.code === 'ENOENT') {
-            await fs.writeFile(MESSAGES_FILE, '[]', 'utf8');
-            chatMessages = [];
-            console.log('No messages file found, created a new one.');
-        } else {
-            console.error('Failed to load messages:', error);
-            chatMessages = [];
-        }
-    }
-}
-
-async function saveMessagesToFile() {
-    try {
-        await fs.writeFile(MESSAGES_FILE, JSON.stringify(chatMessages, null, 2), 'utf8');
-        // console.log('Messages saved to file.'); // Log less frequently
-    } catch (error) {
-        console.error('Error saving messages:', error);
-    }
-}
-
-// Initialize data directories and load messages when the server starts
-(async () => {
-    await ensureDataDirectories();
-    await loadMessagesFromFile();
-})();
-
-// --- Express server setup (for serving images) ---
-const app = express();
-// Serve static images from the /images route
-app.use('/images', express.static(IMAGES_DIR));
-
-// Create a standard HTTP server to host the WebSocket server
-const httpServer = http.createServer(app);
-
-// --- WebSocket server setup ---
-const wss = new WebSocket.Server({ server: httpServer });
-
-httpServer.listen(process.env.PORT || 4000, () => { // Use process.env.PORT for Render
-    console.log(`HTTP and WebSocket server running on port ${process.env.PORT || 4000}`);
-    console.log(`Images served from /images/`);
-});
-
-// --- WebSocket logic ---
-wss.on('connection', (socket) => {
-    console.log('Client connected!');
-
-    socket.on('message', async (message) => { // Made async to await fs operations
+    socket.on('message', (message) => {
         try {
-            const parsed = JSON.parse(message);
+            const parsedMessage = JSON.parse(message);
 
-            if (parsed.type === 'join') {
-                const room = parsed.room || 'anonymous';
-                const username = parsed.user;
-                const profile = parsed.profile;
+            if (parsedMessage.type === 'join') {
+                const roomId = parsedMessage.room || 'anonymous';
+                const username = parsedMessage.user;
+                const profile = parsedMessage.profile;
 
-                if (!username) {
-                    console.error("Username is required for join, closing socket.");
-                    return socket.close();
+                if (typeof username !== 'string') {
+                    console.error("Username must be a string");
+                    socket.close();
+                    return;
                 }
 
-                userConnections.set(socket, { username, profile, room }); // Store current room for user
+                userConnections.set(socket, { username, profile });
 
-                if (!rooms[room]) rooms[room] = new Set();
-                rooms[room].add(socket);
-
-                console.log(`Client ${username} joined room: ${room}`);
-
-                // Send chat history for the joined room
-                const roomHistory = chatMessages.filter(m => m.room === room);
-                if (roomHistory.length > 0) {
-                    // Send history as a single 'history' message
-                    socket.send(JSON.stringify({ type: 'history', room: room, messages: roomHistory }));
-                    console.log(`Sent ${roomHistory.length} history messages to ${username} in room ${room}`);
+                if (!rooms[roomId]) {
+                    rooms[roomId] = new Set();
                 }
-
-                sendRoomPopulation(room);
-                sendUserList(room);
-
-            } else if (parsed.type === 'message') {
-                const room = parsed.room;
-                const content = parsed.content;
+                rooms[roomId].add(socket);
+                console.log(`Client ${username} joined room: ${roomId}`);
+                sendRoomPopulation(roomId);
+                sendUser List(roomId);
+            } else if (parsedMessage.type === 'message') {
+                const roomId = parsedMessage.room;
+                const content = parsedMessage.content;
                 const senderInfo = userConnections.get(socket);
-                const sender = senderInfo?.username || 'Anonymous';
-                const senderProfile = senderInfo?.profile || null;
-                const id = parsed.id || uuidv4(); // Ensure ID even if client doesn't send it
-                const timestamp = parsed.timestamp || new Date().toISOString();
+                const sender = senderInfo ? senderInfo.username : 'Anonymous';
+                const senderProfile = senderInfo ? senderInfo.profile : null;
+                const id = parsedMessage.id;
+                const timestamp = parsedMessage.timestamp;
 
-                if (!room || !content) {
-                    console.error("Room ID and content are required for message.");
+                if (typeof roomId !== 'string' || typeof content !== 'string' || typeof id !== 'string' || typeof timestamp !== 'string') {
+                    console.error("Room ID, content, ID, and timestamp must be strings");
                     return;
                 }
 
-                const newMessage = {
-                    type: 'message',
-                    room,
-                    content,
-                    sender,
-                    profile: senderProfile, // Use 'profile' to match client's expectation
-                    id,
-                    timestamp
-                };
-
-                chatMessages.push(newMessage);
-                await saveMessagesToFile(); // Save message to file
-                broadcastToRoom(room, newMessage); // Broadcast to all connected clients in the room
-
-            } else if (parsed.type === 'image') {
-                const room = parsed.room;
-                const base64Image = parsed.data; // Raw base64 from client
-                const filename = parsed.filename || 'image.png'; // Client should send filename, default if not
+                if (rooms[roomId]) {
+                    for (let client of rooms[roomId].values()) {
+                        if (client.readyState === WebSocket.OPEN) {
+                            try {
+                                client.send(JSON.stringify({
+                                    type: 'message',
+                                    room: roomId,
+                                    content: content,
+                                    sender: sender,
+                                    senderProfile: senderProfile,
+                                    id: id,
+                                    timestamp: timestamp
+                                }));
+                            } catch (error) {
+                                console.error('Error sending message:', error);
+                            }
+                        }
+                    }
+                } else {
+                    console.log(`Room ${roomId} does not exist.`);
+                }
+            } else if (parsedMessage.type === 'image') {
+                const roomId = parsedMessage.room;
+                const base64Image = parsedMessage.data;
                 const senderInfo = userConnections.get(socket);
-                const sender = senderInfo?.username || 'Anonymous';
-                const senderProfile = senderInfo?.profile || null;
-                const id = parsed.id || uuidv4();
-                const timestamp = parsed.timestamp || new Date().toISOString();
+                const sender = senderInfo ? senderInfo.username : 'Anonymous';
+                const senderProfile = senderInfo ? senderInfo.profile : null;
+                const id = parsedMessage.id;
+                const timestamp = parsedMessage.timestamp;
 
-                if (!room || !base64Image) {
-                    console.error("Room ID and image data are required for image message.");
+                if (typeof roomId !== 'string' || typeof base64Image !== 'string' || typeof id !== 'string' || typeof timestamp !== 'string') {
+                    console.error("Room ID, image data, ID, and timestamp must be strings");
                     return;
                 }
 
-                // Save image to disk
-                const imageBuffer = Buffer.from(base64Image, 'base64');
-                const ext = path.extname(filename);
-                const uniqueName = `${uuidv4()}${ext || '.png'}`; // Fallback .png if no extension
-                const filePath = path.join(IMAGES_DIR, uniqueName);
-                const imageUrl = `/images/${uniqueName}`; // URL for client to fetch image
+                if (rooms[roomId]) {
+                    for (let client of rooms[roomId].values()) {
+                        if (client.readyState === WebSocket.OPEN) {
+                            try {
+                                client.send(JSON.stringify({
+                                    type: 'image',
+                                    room: roomId,
+                                    data: base64Image,
+                                    sender: sender,
+                                    senderProfile: senderProfile,
+                                    id: id,
+                                    timestamp: timestamp
+                                }));
+                            } catch (error) {
+                                console.error('Error sending image:', error);
+                            }
+                        }
+                    }
+                } else {
+                    console.log(`Room ${roomId} does not exist.`);
+                }
+            } else if (parsedMessage.type === 'leave') {
+                const roomId = parsedMessage.room;
+                const userInfo = userConnections.get(socket);
+                const username = userInfo ? userInfo.username : 'Anonymous';
 
-                try {
-                    await fs.writeFile(filePath, imageBuffer);
-                    console.log(`Image saved: ${filePath}`);
-                } catch (error) {
-                    console.error('Failed to save image:', error);
-                    // Inform client about the error
-                    socket.send(JSON.stringify({ type: 'error', message: 'Failed to save image on server.' }));
+                if (typeof roomId !== 'string') {
+                    console.error("Room ID must be a string");
                     return;
                 }
 
-                const imageMessage = {
-                    type: 'image',
-                    room,
-                    imageUrl, // Send the URL, not base64, to clients
-                    sender,
-                    profile: senderProfile, // Use 'profile'
-                    id,
-                    timestamp,
-                    content: `[Image: ${filename}]` // A text representation for display
-                };
-
-                chatMessages.push(imageMessage);
-                await saveMessagesToFile(); // Save image message metadata
-                broadcastToRoom(room, imageMessage);
-
-            } else if (parsed.type === 'leave') {
-                const room = parsed.room;
-                const info = userConnections.get(socket);
-                const username = info?.username || 'Anonymous';
-
-                if (rooms[room]) {
-                    rooms[room].delete(socket);
-                    userConnections.delete(socket); // Remove connection from map
-                    if (rooms[room].size === 0) delete rooms[room]; // Remove room if empty
-                    sendRoomPopulation(room);
-                    sendUserList(room);
-                    console.log(`${username} left room ${room}`);
+                if (rooms[roomId]) {
+                    rooms[roomId].delete(socket);
+                    userConnections.delete(socket);
+                    console.log(`Client ${username} left room: ${roomId}`);
+                    sendRoomPopulation(roomId);
+                    sendUser List(roomId);
+                    if (rooms[roomId].size === 0) {
+                        delete rooms[roomId];
+                    }
                 }
             } else {
-                console.log("Unknown message type received:", parsed.type);
-                socket.send(JSON.stringify({ type: 'error', message: 'Unknown message type.' }));
+                console.log("Unknown message type:", parsedMessage.type);
             }
-        } catch (err) {
-            console.error('Error handling WebSocket message:', err);
-            socket.send(JSON.stringify({ type: 'error', message: 'Server internal error.' }));
+        } catch (error) {
+            console.error('Error parsing message:', error);
         }
     });
 
     socket.on('close', () => {
-        const info = userConnections.get(socket);
-        const username = info?.username || 'Anonymous';
-        const roomJoined = info?.room; // Get the room the user was in
-
-        if (roomJoined && rooms[roomJoined]) {
-            rooms[roomJoined].delete(socket);
-            if (rooms[roomJoined].size === 0) {
-                delete rooms[roomJoined];
+        const userInfo = userConnections.get(socket);
+        const username = userInfo ? userInfo.username : 'Anonymous';
+        for (const roomId in rooms) {
+            rooms[roomId].delete(socket);
+            if (rooms[roomId].size === 0) {
+                delete rooms[roomId];
             }
-            sendRoomPopulation(roomJoined);
-            sendUserList(roomJoined);
+            sendRoomPopulation(roomId);
+            sendUser List(roomId);
         }
         userConnections.delete(socket);
-        console.log(`Client ${username} disconnected from room ${roomJoined || 'unknown'}.`);
-    });
-
-    socket.on('error', (err) => {
-        console.error(`WebSocket error for client ${userConnections.get(socket)?.username || 'Unknown'}:`, err);
+        console.log(`Client ${username} disconnected!`);
     });
 });
 
-// --- Utility functions ---
-function broadcastToRoom(room, data) {
-    if (!rooms[room]) return;
-    const message = JSON.stringify(data);
-    for (const client of rooms[room]) {
-        if (client.readyState === WebSocket.OPEN) {
-            client.send(message);
+function sendRoomPopulation(roomId) {
+    if (rooms[roomId]) {
+        const population = rooms[roomId].size;
+        for (let client of rooms[roomId].values()) {
+            if (client.readyState === WebSocket.OPEN) {
+                try {
+                    client.send(JSON.stringify({ type: 'population', room: roomId, count: population }));
+                } catch (error) {
+                    console.error('Error sending population:', error);
+                }
+            }
         }
     }
 }
 
-function sendRoomPopulation(room) {
-    if (!rooms[room]) return;
-    const count = rooms[room].size;
-    const message = JSON.stringify({ type: 'population', room, count });
-    for (const client of rooms[room]) {
-        if (client.readyState === WebSocket.OPEN) {
-            client.send(message);
+function sendUser List(roomId) {
+    if (rooms[roomId]) {
+        const users = Array.from(rooms[roomId]).map(socket => {
+            const userInfo = userConnections.get(socket);
+            return userInfo ? userInfo.username : 'Anonymous';
+        });
+        for (let client of rooms[roomId].values()) {
+            if (client.readyState === WebSocket.OPEN) {
+                try {
+                    client.send(JSON.stringify({ type: 'userList', room: roomId, users: users }));
+                } catch (error) {
+                    console.error('Error sending user list:', error);
+                }
+            }
         }
     }
 }
 
-function sendUserList(room) {
-    if (!rooms[room]) return;
-    const users = Array.from(rooms[room]).map(socket => {
-        const info = userConnections.get(socket);
-        return info?.username || 'Anonymous';
-    });
-    const message = JSON.stringify({ type: 'userList', room, users });
-    for (const client of rooms[room]) {
-        if (client.readyState === WebSocket.OPEN) {
-            client.send(message);
-        }
-    }
-}
+console.log('WebSocket server is running on port 4000');
