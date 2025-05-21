@@ -1,159 +1,241 @@
-  const WebSocket = require('ws');
+ const fs = require('fs/promises');
+const path = require('path');
+const { v4: uuidv4 } = require('uuid');
+const http = require('http');
+const express = require('express');
+const WebSocket = require('ws');
 
-const server = new WebSocket.Server({ port: 4000 });
+// --- Configuration ---
+const CHAT_DATA_DIR = path.join(__dirname, 'chat_data');
+const MESSAGES_FILE = path.join(CHAT_DATA_DIR, 'messages.json');
+const IMAGES_DIR = path.join(CHAT_DATA_DIR, 'images');
+
+// --- In-memory storage ---
+let chatMessages = [];
 const rooms = {};
-const userConnections = new Map(); // To store user info associated with each socket
+const userConnections = new Map();
 
-server.on('connection', (socket) => {
-    console.log('A new client connected!');
+// --- Ensure directories and load messages ---
+async function ensureDataDirectories() {
+    await fs.mkdir(IMAGES_DIR, { recursive: true });
+    await fs.mkdir(CHAT_DATA_DIR, { recursive: true });
+}
 
-    socket.on('message', (message) => {
+async function loadMessagesFromFile() {
+    try {
+        const data = await fs.readFile(MESSAGES_FILE, 'utf8');
+        chatMessages = JSON.parse(data);
+    } catch (error) {
+        if (error.code === 'ENOENT') {
+            await fs.writeFile(MESSAGES_FILE, '[]', 'utf8');
+            chatMessages = [];
+        } else {
+            console.error('Failed to load messages:', error);
+            chatMessages = [];
+        }
+    }
+}
+
+async function saveMessagesToFile() {
+    try {
+        await fs.writeFile(MESSAGES_FILE, JSON.stringify(chatMessages, null, 2), 'utf8');
+    } catch (error) {
+        console.error('Error saving messages:', error);
+    }
+}
+
+(async () => {
+    await ensureDataDirectories();
+    await loadMessagesFromFile();
+})();
+
+// --- Express server setup ---
+const app = express();
+app.use('/images', express.static(IMAGES_DIR));
+
+const httpServer = http.createServer(app);
+const wss = new WebSocket.Server({ server: httpServer });
+
+httpServer.listen(4000, () => {
+    console.log('HTTP and WebSocket server running on port 4000');
+    console.log(`Images available at http://localhost:4000/images/`);
+});
+
+// --- WebSocket logic ---
+wss.on('connection', (socket) => {
+    console.log('Client connected');
+
+    socket.on('message', async (message) => {
         try {
-            const parsedMessage = JSON.parse(message);
+            const parsed = JSON.parse(message);
 
-            if (parsedMessage.type === 'join') {
-                const roomId = parsedMessage.room || 'anonymous'; // Default to 'anonymous' if no room provided
-                const username = parsedMessage.user;
-                const profile = parsedMessage.profile;
+            if (parsed.type === 'join') {
+                const room = parsed.room || 'anonymous';
+                const username = parsed.user;
+                const profile = parsed.profile;
 
-                if (!username) {
-                    console.error("Username is required for join");
-                    socket.close();
-                    return;
-                }
-                userConnections.set(socket, { username, profile }); // Associate socket with user info
+                if (!username) return socket.close();
 
-                if (!rooms[roomId]) {
-                    rooms[roomId] = new Set();
-                }
-                rooms[roomId].add(socket);
-                console.log(`Client ${username} joined room: ${roomId}`);
-                sendRoomPopulation(roomId);
-                sendUserList(roomId); // Send updated user list on join
-            } else if (parsedMessage.type === 'message') {
-                const roomId = parsedMessage.room;
-                const content = parsedMessage.content;
-                const senderInfo = userConnections.get(socket);
-                const sender = senderInfo ? senderInfo.username : 'Anonymous';
-                const senderProfile = senderInfo ? senderInfo.profile : null;
-                const id = parsedMessage.id; // Get the id from the client
-                const timestamp = parsedMessage.timestamp; // Get the timestamp from the client
+                userConnections.set(socket, { username, profile });
 
-                if (!roomId || !content || !id || !timestamp) {
-                    console.error("Room ID, content, ID, and timestamp are required for message");
-                    return;
+                if (!rooms[room]) rooms[room] = new Set();
+                rooms[room].add(socket);
+
+                const roomHistory = chatMessages.filter(m => m.room === room);
+                if (roomHistory.length > 0) {
+                    socket.send(JSON.stringify({ type: 'history', messages: roomHistory }));
                 }
 
-                if (rooms[roomId]) {
-                    for (let client of rooms[roomId].values()) {
-                        if (client.readyState === WebSocket.OPEN) {
-                            client.send(JSON.stringify({
-                                type: 'message',
-                                room: roomId,
-                                content: content,
-                                sender: sender,
-                                senderProfile: senderProfile,
-                                id: id, // Send the id back to the client
-                                timestamp: timestamp // Send the timestamp back to the client
-                            }));
-                        }
-                    }
-                } else {
-                    console.log(`Room ${roomId} does not exist.`);
-                }
-            } else if (parsedMessage.type === 'image') {
-                const roomId = parsedMessage.room;
-                const base64Image = parsedMessage.data;
-                const senderInfo = userConnections.get(socket);
-                const sender = senderInfo ? senderInfo.username : 'Anonymous';
-                const senderProfile = senderInfo ? senderInfo.profile : null;
-                const id = parsedMessage.id; // Get the id from the client
-                const timestamp = parsedMessage.timestamp; // Get the timestamp from the client
-
-                if (!roomId || !base64Image || !id || !timestamp) {
-                    console.error("Room ID, image data, ID, and timestamp are required for images");
-                    return;
-                }
-
-                if (rooms[roomId]) {
-                    for (let client of rooms[roomId].values()) {
-                        if (client.readyState === WebSocket.OPEN) {
-                            client.send(JSON.stringify({
-                                type: 'image',
-                                room: roomId,
-                                data: base64Image,
-                                sender: sender,
-                                senderProfile: senderProfile,
-                                id: id, // Send the id back to the client
-                                timestamp: timestamp // Send the timestamp back to the client
-                            }));
-                        }
-                    }
-                } else {
-                    console.log(`Room ${roomId} does not exist.`);
-                }
-            } else if (parsedMessage.type === 'leave') {
-                const roomId = parsedMessage.room;
-                const userInfo = userConnections.get(socket);
-                const username = userInfo ? userInfo.username : 'Anonymous';
-
-                if (rooms[roomId]) {
-                    rooms[roomId].delete(socket);
-                    userConnections.delete(socket);
-                    console.log(`Client ${username} left room: ${roomId}`);
-                    sendRoomPopulation(roomId);
-                    sendUserList(roomId); // Send updated user list on leave
-                    if (rooms[roomId].size === 0) {
-                        delete rooms[roomId];
-                    }
-                }
-            } else {
-                console.log("Unknown message type:", parsedMessage.type);
+                sendRoomPopulation(room);
+                sendUserList(room);
             }
-        } catch (error) {
-            console.error('Error parsing message:', error);
+
+            else if (parsed.type === 'message') {
+                const room = parsed.room;
+                const content = parsed.content;
+                const senderInfo = userConnections.get(socket);
+                const sender = senderInfo?.username || 'Anonymous';
+                const senderProfile = senderInfo?.profile || null;
+                const id = parsed.id || uuidv4();
+                const timestamp = parsed.timestamp || new Date().toISOString();
+
+                if (!room || !content) return;
+
+                const newMessage = {
+                    type: 'message',
+                    room,
+                    content,
+                    sender,
+                    senderProfile,
+                    id,
+                    timestamp
+                };
+
+                chatMessages.push(newMessage);
+                await saveMessagesToFile();
+
+                broadcastToRoom(room, newMessage);
+            }
+
+            else if (parsed.type === 'image') {
+                const room = parsed.room;
+                const base64Image = parsed.data;
+                const filename = parsed.filename;
+                const senderInfo = userConnections.get(socket);
+                const sender = senderInfo?.username || 'Anonymous';
+                const senderProfile = senderInfo?.profile || null;
+                const id = parsed.id || uuidv4();
+                const timestamp = parsed.timestamp || new Date().toISOString();
+
+                if (!room || !base64Image) return;
+
+                const imageBuffer = Buffer.from(base64Image, 'base64');
+                const ext = path.extname(filename || '.png');
+                const uniqueName = `${uuidv4()}${ext}`;
+                const filePath = path.join(IMAGES_DIR, uniqueName);
+                const imageUrl = `/images/${uniqueName}`;
+
+                try {
+                    await fs.writeFile(filePath, imageBuffer);
+                } catch (error) {
+                    console.error('Failed to save image:', error);
+                    return;
+                }
+
+                const imageMessage = {
+                    type: 'image',
+                    room,
+                    imageUrl,
+                    sender,
+                    senderProfile,
+                    id,
+                    timestamp,
+                    content: `[Image: ${filename || 'image'}]`
+                };
+
+                chatMessages.push(imageMessage);
+                await saveMessagesToFile();
+                broadcastToRoom(room, imageMessage);
+            }
+
+            else if (parsed.type === 'leave') {
+                const room = parsed.room;
+                const info = userConnections.get(socket);
+                const username = info?.username || 'Anonymous';
+
+                if (rooms[room]) {
+                    rooms[room].delete(socket);
+                    userConnections.delete(socket);
+                    if (rooms[room].size === 0) delete rooms[room];
+                    sendRoomPopulation(room);
+                    sendUserList(room);
+                    console.log(`${username} left room ${room}`);
+                }
+            }
+
+            else {
+                socket.send(JSON.stringify({ type: 'error', message: 'Unknown message type' }));
+            }
+        } catch (err) {
+            console.error('Message handling error:', err);
+            socket.send(JSON.stringify({ type: 'error', message: 'Server error' }));
         }
     });
 
     socket.on('close', () => {
-        const userInfo = userConnections.get(socket);
-        const username = userInfo ? userInfo.username : 'Anonymous';
+        const info = userConnections.get(socket);
+        const username = info?.username || 'Anonymous';
+
         for (const roomId in rooms) {
-            rooms[roomId].delete(socket);
-            if (rooms[roomId].size === 0) {
-                delete rooms[roomId];
+            if (rooms[roomId].has(socket)) {
+                rooms[roomId].delete(socket);
+                if (rooms[roomId].size === 0) delete rooms[roomId];
+                sendRoomPopulation(roomId);
+                sendUserList(roomId);
             }
-            sendRoomPopulation(roomId);
-            sendUserList(roomId); // Send updated user list on disconnect
         }
+
         userConnections.delete(socket);
-        console.log(`Client ${username} disconnected!`);
+        console.log(`${username} disconnected`);
+    });
+
+    socket.on('error', (err) => {
+        console.error(`WebSocket error:`, err);
     });
 });
 
-function sendRoomPopulation(roomId) {
-    if (rooms[roomId]) {
-        const population = rooms[roomId].size;
-        for (let client of rooms[roomId].values()) {
-            if (client.readyState === WebSocket.OPEN) {
-                client.send(JSON.stringify({ type: 'population', room: roomId, count: population }));
-            }
+// --- Utility functions ---
+function broadcastToRoom(room, data) {
+    if (!rooms[room]) return;
+    const message = JSON.stringify(data);
+    for (const client of rooms[room]) {
+        if (client.readyState === WebSocket.OPEN) {
+            client.send(message);
         }
     }
 }
 
-function sendUserList(roomId) {
-    if (rooms[roomId]) {
-        const users = Array.from(rooms[roomId]).map(socket => {
-            const userInfo = userConnections.get(socket);
-            return userInfo ? userInfo.username : 'Anonymous';
-        });
-        for (let client of rooms[roomId].values()) {
-            if (client.readyState === WebSocket.OPEN) {
-                client.send(JSON.stringify({ type: 'userList', room: roomId, users: users }));
-            }
+function sendRoomPopulation(room) {
+    if (!rooms[room]) return;
+    const count = rooms[room].size;
+    const message = JSON.stringify({ type: 'population', room, count });
+    for (const client of rooms[room]) {
+        if (client.readyState === WebSocket.OPEN) {
+            client.send(message);
         }
     }
 }
 
-console.log('WebSocket server is running on port 4000');
+function sendUserList(room) {
+    if (!rooms[room]) return;
+    const users = Array.from(rooms[room]).map(socket => {
+        const info = userConnections.get(socket);
+        return info?.username || 'Anonymous';
+    });
+    const message = JSON.stringify({ type: 'userList', room, users });
+    for (const client of rooms[room]) {
+        if (client.readyState === WebSocket.OPEN) {
+            client.send(message);
+        }
+    }
+}
